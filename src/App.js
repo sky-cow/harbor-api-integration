@@ -1,5 +1,5 @@
 // App.jsx - Main application component
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   Send,
   Users,
@@ -14,6 +14,8 @@ import "./App.css";
 const API_BASE_URL =
   process.env.REACT_APP_API_BASE_URL ||
   "https://harbor-stage.owlpay.com/api/v1";
+const WEBHOOK_VIEWER_URL =
+  process.env.REACT_APP_WEBHOOK_VIEWER_URL || "http://localhost:4000";
 
 function App() {
   const [apiKey, setApiKey] = useState("");
@@ -86,13 +88,21 @@ function App() {
 
   // Subscriptions (webhook subscriptions) state
   const [subscriptionForm, setSubscriptionForm] = useState({
-    url: "https://example.com/webhook",
-    events: ["transfer.created"],
-    description: "Test webhook subscription",
-    // default path guess — change if your API differs
-    endpointPath: "/webhook_subscriptions",
+    endpoint: "https://example.com/webhook",
+    notification_types: ["*"],
+    name: "Transactions Webhook",
+    enabled: true,
+    restricted: false,
+    // Harbor docs: /api/v1/notifications/subscriptions
+    endpointPath: "/notifications/subscriptions",
   });
   const [subscriptionId, setSubscriptionId] = useState("");
+
+  const [webhookEvents, setWebhookEvents] = useState([]);
+  const [webhookViewerError, setWebhookViewerError] = useState(null);
+  const [webhookViewerLoading, setWebhookViewerLoading] = useState(false);
+
+  const MAX_WEBHOOK_EVENTS_UI = 50;
 
   // Webhook verifier state (client-side helper for verifying signatures)
   const [verifier, setVerifier] = useState({
@@ -352,17 +362,24 @@ function App() {
   // --- Subscriptions (webhook) API helpers ---
   // NOTE: default endpointPath can be changed in the subscription form if your API differs.
   const createSubscription = () => {
-    if (!subscriptionForm.url) {
-      setError("Please enter a webhook URL");
+    if (!subscriptionForm.endpoint) {
+      setError("Please enter a webhook endpoint URL");
       return;
     }
+
+    const notificationTypes = Array.isArray(subscriptionForm.notification_types)
+      ? subscriptionForm.notification_types.filter(Boolean)
+      : [];
+
     const payload = {
-      url: subscriptionForm.url,
-      events: subscriptionForm.events,
-      description: subscriptionForm.description,
+      endpoint: subscriptionForm.endpoint,
+      notification_types: notificationTypes.length ? notificationTypes : ["*"],
+      name: subscriptionForm.name,
+      enabled: subscriptionForm.enabled,
+      restricted: subscriptionForm.restricted,
     };
     makeRequest(
-      subscriptionForm.endpointPath || "/webhook_subscriptions",
+      subscriptionForm.endpointPath || "/notifications/subscriptions",
       "POST",
       payload
     );
@@ -370,7 +387,7 @@ function App() {
 
   const listSubscriptions = () => {
     makeRequest(
-      subscriptionForm.endpointPath || "/webhook_subscriptions",
+      subscriptionForm.endpointPath || "/notifications/subscriptions",
       "GET"
     );
   };
@@ -382,7 +399,7 @@ function App() {
     }
     makeRequest(
       `${
-        subscriptionForm.endpointPath || "/webhook_subscriptions"
+        subscriptionForm.endpointPath || "/notifications/subscriptions"
       }/${subscriptionId}`,
       "GET"
     );
@@ -395,10 +412,46 @@ function App() {
     }
     makeRequest(
       `${
-        subscriptionForm.endpointPath || "/webhook_subscriptions"
+        subscriptionForm.endpointPath || "/notifications/subscriptions"
       }/${subscriptionId}`,
       "DELETE"
     );
+  };
+
+  const fetchWebhookEvents = async () => {
+    setWebhookViewerLoading(true);
+    setWebhookViewerError(null);
+    try {
+      const res = await fetch(`${WEBHOOK_VIEWER_URL}/events`);
+      if (!res.ok) {
+        throw new Error(
+          `Local listener responded with HTTP ${res.status} ${res.statusText}`
+        );
+      }
+      const data = await res.json();
+      setWebhookEvents(Array.isArray(data.events) ? data.events : []);
+    } catch (err) {
+      setWebhookViewerError(err.message || String(err));
+    } finally {
+      setWebhookViewerLoading(false);
+    }
+  };
+
+  const clearWebhookEvents = async () => {
+    setWebhookViewerError(null);
+    try {
+      const res = await fetch(`${WEBHOOK_VIEWER_URL}/events/reset`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        throw new Error(
+          `Unable to clear events: HTTP ${res.status} ${res.statusText}`
+        );
+      }
+      setWebhookEvents([]);
+    } catch (err) {
+      setWebhookViewerError(err.message || String(err));
+    }
   };
 
   // --- Webhook verification helper (client-side tester) ---
@@ -459,6 +512,41 @@ function App() {
       setError("Verifier error: " + (err.message || String(err)));
     }
   };
+
+  // Real-time listener: EventSource to webhook-server's /events/stream
+  useEffect(() => {
+    let es;
+    // only open live stream while user is on subscriptions tab
+    if (activeTab === "subscriptions") {
+      setWebhookViewerError(null);
+      try {
+        es = new EventSource(`${WEBHOOK_VIEWER_URL}/events/stream`);
+        es.onmessage = (evt) => {
+          try {
+            const parsed = JSON.parse(evt.data);
+            setWebhookEvents((prev) =>
+              [parsed, ...prev].slice(0, MAX_WEBHOOK_EVENTS_UI)
+            );
+          } catch (err) {
+            console.warn("SSE parse error", err);
+          }
+        };
+        es.onerror = (err) => {
+          console.warn("EventSource error", err);
+          setWebhookViewerError("SSE connection error");
+          // keep connection open for automatic reconnect attempts by browser
+        };
+      } catch (err) {
+        setWebhookViewerError(err.message || String(err));
+      }
+    }
+
+    return () => {
+      if (es) {
+        es.close();
+      }
+    };
+  }, [activeTab, WEBHOOK_VIEWER_URL]);
 
   return (
     <div className="app">
@@ -1134,21 +1222,36 @@ function App() {
                           })
                         }
                         className="input"
-                        placeholder="/webhook_subscriptions"
+                        placeholder="/notifications/subscriptions"
                       />
                       <p className="help-text">
-                        Change if your Harbor subscription endpoint differs.
+                        Harbor default is /api/v1/notifications/subscriptions.
                       </p>
                     </div>
 
                     <div className="full-width">
-                      <label className="label">Webhook URL</label>
+                      <label className="label">Subscription Name</label>
                       <input
-                        value={subscriptionForm.url}
+                        value={subscriptionForm.name}
                         onChange={(e) =>
                           setSubscriptionForm({
                             ...subscriptionForm,
-                            url: e.target.value,
+                            name: e.target.value,
+                          })
+                        }
+                        className="input"
+                        placeholder="Transactions Webhook"
+                      />
+                    </div>
+
+                    <div className="full-width">
+                      <label className="label">Webhook Endpoint URL</label>
+                      <input
+                        value={subscriptionForm.endpoint}
+                        onChange={(e) =>
+                          setSubscriptionForm({
+                            ...subscriptionForm,
+                            endpoint: e.target.value,
                           })
                         }
                         className="input"
@@ -1157,39 +1260,65 @@ function App() {
                     </div>
 
                     <div className="full-width">
-                      <label className="label">Events (comma separated)</label>
+                      <label className="label">
+                        Notification Types (comma separated)
+                      </label>
                       <input
                         value={
-                          Array.isArray(subscriptionForm.events)
-                            ? subscriptionForm.events.join(",")
-                            : subscriptionForm.events
+                          Array.isArray(subscriptionForm.notification_types)
+                            ? subscriptionForm.notification_types.join(",")
+                            : subscriptionForm.notification_types
                         }
                         onChange={(e) =>
                           setSubscriptionForm({
                             ...subscriptionForm,
-                            events: e.target.value
+                            notification_types: e.target.value
                               .split(",")
-                              .map((s) => s.trim()),
+                              .map((s) => s.trim())
+                              .filter(Boolean),
                           })
                         }
                         className="input"
-                        placeholder="transfer.created, transfer.updated"
+                        placeholder="*, transfer.created, transfer.updated"
                       />
+                      <p className="help-text">
+                        Use * for all events or list specific ones from the
+                        Harbor docs.
+                      </p>
                     </div>
 
-                    <div className="full-width">
-                      <label className="label">Description</label>
-                      <input
-                        value={subscriptionForm.description}
+                    <div>
+                      <label className="label">Enabled</label>
+                      <select
+                        value={subscriptionForm.enabled ? "true" : "false"}
                         onChange={(e) =>
                           setSubscriptionForm({
                             ...subscriptionForm,
-                            description: e.target.value,
+                            enabled: e.target.value === "true",
                           })
                         }
                         className="input"
-                        placeholder="Subscription description"
-                      />
+                      >
+                        <option value="true">true</option>
+                        <option value="false">false</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="label">Restricted</label>
+                      <select
+                        value={subscriptionForm.restricted ? "true" : "false"}
+                        onChange={(e) =>
+                          setSubscriptionForm({
+                            ...subscriptionForm,
+                            restricted: e.target.value === "true",
+                          })
+                        }
+                        className="input"
+                      >
+                        <option value="false">false</option>
+                        <option value="true">true</option>
+                      </select>
                     </div>
                   </div>
 
@@ -1332,6 +1461,52 @@ function App() {
                         <strong>Computed (base64):</strong>{" "}
                         {verifierResult.computed.base64}
                       </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="divider">
+                  <h3 className="section-title">
+                    Local Webhook Listener (ngrok helper)
+                  </h3>
+                  <p className="help-text">
+                    Run <code>npm run webhook-server</code> and point ngrok to{" "}
+                    {WEBHOOK_VIEWER_URL}/webhooks/harbor. Use the HTTPS URL from
+                    ngrok as your Harbor subscription endpoint.
+                  </p>
+                  <div className="flex-row">
+                    <button
+                      onClick={fetchWebhookEvents}
+                      className="btn btn-info"
+                      disabled={webhookViewerLoading}
+                    >
+                      Fetch Latest Events
+                    </button>
+                    <button
+                      onClick={clearWebhookEvents}
+                      className="btn btn-danger"
+                    >
+                      Clear Stored Events
+                    </button>
+                  </div>
+                  {webhookViewerLoading && (
+                    <div className="loading">
+                      <div className="spinner"></div>
+                      <span>Fetching events from local listener...</span>
+                    </div>
+                  )}
+                  {webhookViewerError && (
+                    <div className="alert alert-error">
+                      <AlertCircle size={20} />
+                      <div>
+                        <strong>Local listener error:</strong>{" "}
+                        {webhookViewerError}
+                      </div>
+                    </div>
+                  )}
+                  {!!webhookEvents.length && (
+                    <div className="code-block">
+                      <pre>{JSON.stringify(webhookEvents, null, 2)}</pre>
                     </div>
                   )}
                 </div>
