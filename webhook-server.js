@@ -28,6 +28,7 @@ const TRUSTED_ORIGINS = Array.from(new Set([...defaultOrigins, ...envOrigins]));
 const HARBOR_WEBHOOK_SECRET = process.env.HARBOR_WEBHOOK_SECRET || "";
 const MAX_EVENTS = Number(process.env.WEBHOOK_EVENT_BUFFER || 25);
 const HEARTBEAT_MS = Number(process.env.WEBHOOK_SSE_HEARTBEAT_MS || 20_000);
+console.log("webhook secret:", HARBOR_WEBHOOK_SECRET);
 
 const app = express();
 const events = [];
@@ -70,6 +71,7 @@ app.post(
       req.get("x-hub-signature") ||
       ""
     ).toString();
+    console.log("Received signature header:", signatureHeader);
 
     const computedSignature = HARBOR_WEBHOOK_SECRET
       ? crypto
@@ -77,6 +79,8 @@ app.post(
           .update(payloadString)
           .digest("hex")
       : null;
+
+    console.log("Computed signature:", computedSignature);
 
     const signatureValid =
       computedSignature && signatureHeader
@@ -155,6 +159,13 @@ app.post("/events/reset", (_req, res) => {
  * Example client: new EventSource('https://...ngrok.io/events/stream')
  */
 app.get("/events/stream", (req, res) => {
+  console.log(
+    "SSE connection from origin:",
+    req.get("origin"),
+    "url:",
+    req.originalUrl
+  );
+
   res.set({
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache, no-transform",

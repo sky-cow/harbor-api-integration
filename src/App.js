@@ -13,9 +13,9 @@ import "./App.css";
 
 const API_BASE_URL =
   process.env.REACT_APP_API_BASE_URL ||
-  "https://harbor-stage.owlpay.com/api/v1";
-const WEBHOOK_VIEWER_URL =
-  process.env.REACT_APP_WEBHOOK_VIEWER_URL || "http://localhost:4000";
+  "https://harbor-sandbox.owlpay.com/api/v1";
+const WEBHOOK_VIEWER_URL = "http://localhost:4000";
+console.log("Using WEBHOOK_VIEWER_URL:", WEBHOOK_VIEWER_URL);
 
 function App() {
   const [apiKey, setApiKey] = useState("");
@@ -520,10 +520,16 @@ function App() {
     if (activeTab === "subscriptions") {
       setWebhookViewerError(null);
       try {
-        es = new EventSource(`${WEBHOOK_VIEWER_URL}/events/stream`);
+        const streamUrl = `${WEBHOOK_VIEWER_URL.replace(
+          /\/$/,
+          ""
+        )}/events/stream`;
+        console.log("Opening EventSource to", streamUrl);
+        es = new EventSource(streamUrl);
         es.onmessage = (evt) => {
           try {
             const parsed = JSON.parse(evt.data);
+            console.log("SSE event received:", parsed);
             setWebhookEvents((prev) =>
               [parsed, ...prev].slice(0, MAX_WEBHOOK_EVENTS_UI)
             );
@@ -1367,102 +1373,6 @@ function App() {
                       Delete Subscription
                     </button>
                   </div>
-                </div>
-
-                <div className="divider">
-                  <h3 className="section-title">
-                    Webhook Verifier (client-side tester)
-                  </h3>
-                  <div className="form-grid">
-                    <div className="full-width">
-                      <label className="label">Signing Secret</label>
-                      <input
-                        value={verifier.secret}
-                        onChange={(e) =>
-                          setVerifier({ ...verifier, secret: e.target.value })
-                        }
-                        className="input"
-                        placeholder="Your webhook signing secret"
-                      />
-                    </div>
-                    <div className="full-width">
-                      <label className="label">
-                        Signature (from Harbor header)
-                      </label>
-                      <input
-                        value={verifier.signature}
-                        onChange={(e) =>
-                          setVerifier({
-                            ...verifier,
-                            signature: e.target.value,
-                          })
-                        }
-                        className="input"
-                        placeholder="hex or base64 signature"
-                      />
-                    </div>
-                    <div className="full-width">
-                      <label className="label">Payload (raw body)</label>
-                      <textarea
-                        value={verifier.payload}
-                        onChange={(e) =>
-                          setVerifier({ ...verifier, payload: e.target.value })
-                        }
-                        className="input"
-                        rows={6}
-                      />
-                    </div>
-                    <div>
-                      <label className="label">Signature Format</label>
-                      <select
-                        value={verifier.signatureFormat}
-                        onChange={(e) =>
-                          setVerifier({
-                            ...verifier,
-                            signatureFormat: e.target.value,
-                          })
-                        }
-                        className="input"
-                      >
-                        <option value="hex">hex</option>
-                        <option value="base64">base64</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  <div className="flex-row">
-                    <button
-                      onClick={verifyWebhook}
-                      disabled={loading}
-                      className="btn btn-primary"
-                    >
-                      Verify Signature
-                    </button>
-                  </div>
-
-                  {verifierResult && (
-                    <div
-                      className={`alert ${
-                        verifierResult.ok ? "alert-success" : "alert-error"
-                      }`}
-                    >
-                      <div>
-                        <strong>Match:</strong>{" "}
-                        {verifierResult.ok ? "YES" : "NO"}
-                      </div>
-                      <div>
-                        <strong>Provided:</strong> {verifierResult.provided}
-                      </div>
-                      <div>
-                        <strong>Computed (hex):</strong>{" "}
-                        {verifierResult.computed.hex}
-                      </div>
-                      <div>
-                        <strong>Computed (base64):</strong>{" "}
-                        {verifierResult.computed.base64}
-                      </div>
-                    </div>
-                  )}
                 </div>
 
                 <div className="divider">
