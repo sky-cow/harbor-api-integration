@@ -28,13 +28,15 @@ const TRUSTED_ORIGINS = Array.from(new Set([...defaultOrigins, ...envOrigins]));
 const HARBOR_WEBHOOK_SECRET = process.env.HARBOR_WEBHOOK_SECRET || "";
 const MAX_EVENTS = Number(process.env.WEBHOOK_EVENT_BUFFER || 25);
 const HEARTBEAT_MS = Number(process.env.WEBHOOK_SSE_HEARTBEAT_MS || 20_000);
-console.log("webhook secret:", HARBOR_WEBHOOK_SECRET);
 
 const app = express();
 const events = [];
 
 // --- SSE clients set for real-time forwarding to connected frontends ---
 const sseClients = new Set();
+
+console.log("Trusted origins for CORS:", TRUSTED_ORIGINS);
+console.log("sseClients set initialized:", sseClients.values());
 
 app.use(
   cors({
@@ -63,34 +65,55 @@ app.post(
       // keep parsedPayload null — we'll store raw string for debugging
     }
 
+    console.log("Received Harbor webhook payload:", payloadString);
     // Harbor may use different header names; check common variants
-    const signatureHeader = (
+    const requestHeader = (
       req.get("x-harbor-signature") ||
       req.get("harbor-signature") ||
       req.get("x-signature") ||
       req.get("x-hub-signature") ||
       ""
     ).toString();
-    console.log("Received signature header:", signatureHeader);
+
+    // Split the header into parts
+    const elements = requestHeader.split(",");
+    const signatureData = elements.reduce((acc, item) => {
+      const [key, value] = item.split("=");
+      acc[key] = value;
+      return acc;
+    }, {});
+
+    // Extract the timestamp and signature
+    const timestamp = signatureData["t"];
+    const signature = signatureData["v1"];
+
+    // console.log("Extracted timestamp:", timestamp);
+    // console.log("Extracted signature:", signature);
+    // console.log("Payload string for signing:", payloadString);
+    // console.log("Harbor webhook secret:", HARBOR_WEBHOOK_SECRET);
+
+    // Create the signed payload string
+    const signedPayload = `${timestamp}.${payloadString}`;
 
     const computedSignature = HARBOR_WEBHOOK_SECRET
       ? crypto
           .createHmac("sha256", HARBOR_WEBHOOK_SECRET)
-          .update(payloadString)
+          .update(signedPayload)
           .digest("hex")
       : null;
 
-    console.log("Computed signature:", computedSignature);
+    // console.log("Computed signature:", computedSignature);
+    // console.log("Signature:", signature);
 
     const signatureValid =
-      computedSignature && signatureHeader
-        ? safeCompare(signatureHeader.trim(), computedSignature)
+      computedSignature && signature
+        ? safeCompare(signature.trim(), computedSignature)
         : null;
 
     const eventRecord = {
       id: crypto.randomUUID(),
       received_at: new Date().toISOString(),
-      signature_header: signatureHeader,
+      signature_header: signature,
       computed_signature: computedSignature,
       signature_valid: signatureValid,
       headers: req.headers,
