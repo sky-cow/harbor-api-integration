@@ -113,6 +113,86 @@ function App() {
   });
   const [verifierResult, setVerifierResult] = useState(null);
 
+  const sendTestWebhook = async () => {
+    try {
+      // Use configured viewer origin (ngrok) or localhost as fallback
+      const base = (
+        process.env.REACT_APP_WEBHOOK_VIEWER_URL || "http://localhost:4000"
+      ).replace(/\/+$/, "");
+      const res = await fetch(`${base}/webhooks/harbor`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          payload: { event: "test.ping", data: { from: "ui" } },
+        }),
+      });
+
+      console.log("RES:", res);
+
+      ///TOMO SEE WHAT WERE DOING HERE, LOG RES AND MAKESURE FLOW MAKES SENSE
+      //setWebhookEvents({ status: res.status, body: await res.json() });
+
+      // const data = await res
+      //   .json()
+      //   .then((data) => {
+      //     setWebhookEvents({ status: res.status, body: data });
+      //   })
+      //   .catch(() => null);
+    } catch (err) {
+      setWebhookEvents({ error: String(err) });
+    } finally {
+      console.log("Test webhook sent");
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab !== "subscriptions") return;
+
+    // Use REACT_APP_WEBHOOK_VIEWER_URL (no trailing slash) or fallback to localhost
+    const base = (
+      process.env.REACT_APP_WEBHOOK_VIEWER_URL || "http://localhost:4000"
+    ).replace(/\/+$/, "");
+    // convert http(s) -> ws(s)
+    const wsUrl = base.replace(/^http/, "ws") + "/ws";
+    console.log("Opening WS to", wsUrl);
+
+    let ws = null;
+    let reconnect = null;
+    const connect = () => {
+      ws = new WebSocket(wsUrl);
+      ws.onopen = () => console.log("WS open");
+      ws.onmessage = (e) => {
+        try {
+          const msg = JSON.parse(e.data);
+          console.log("WS message", msg);
+          setWebhookEvents((prev) => {
+            const updated = [msg, ...prev];
+            if (updated.length > MAX_WEBHOOK_EVENTS_UI) {
+              updated.length = MAX_WEBHOOK_EVENTS_UI;
+            }
+            return updated;
+          });
+          // TODO: set state or dispatch event to update UI with msg
+        } catch (err) {
+          console.warn("WS message parse error", err);
+        }
+      };
+      ws.onerror = (err) => {
+        console.warn("WS error", err);
+      };
+      ws.onclose = () => {
+        console.log("WS closed — reconnecting in 1s");
+        reconnect = setTimeout(connect, 1000);
+      };
+    };
+
+    connect();
+
+    return () => {
+      if (reconnect) clearTimeout(reconnect);
+      if (ws && ws.readyState === WebSocket.OPEN) ws.close();
+    };
+  }, [activeTab]);
   // Centralized request helper with improved error handling and debug info
   const makeRequest = async (
     endpoint,
@@ -1399,6 +1479,15 @@ function App() {
                       Clear Stored Events
                     </button>
                   </div>
+                  <div className="flex-row">
+                    <button
+                      onClick={sendTestWebhook}
+                      className="btn btn-danger"
+                    >
+                      Send Test Webhook{" "}
+                    </button>
+                  </div>
+
                   {webhookViewerLoading && (
                     <div className="loading">
                       <div className="spinner"></div>

@@ -14,6 +14,8 @@ const cors = require("cors");
 const crypto = require("crypto");
 const express = require("express");
 const morgan = require("morgan");
+const createWebSocketServer = require("./ws-server").createWSS;
+const http = require("http");
 
 const PORT = process.env.WEBHOOK_SERVER_PORT || 4000;
 
@@ -31,6 +33,18 @@ const HEARTBEAT_MS = Number(process.env.WEBHOOK_SSE_HEARTBEAT_MS || 20_000);
 
 const app = express();
 const events = [];
+
+const server = http.createServer(app);
+const {
+  wss: wsServer,
+  broadcast: wsBroadcast,
+  clientCount,
+} = createWebSocketServer(server);
+console.log(
+  `WebSocket server attached; initial clients: ${
+    typeof clientCount === "function" ? clientCount() : "n/a"
+  }`
+);
 
 // --- SSE clients set for real-time forwarding to connected frontends ---
 const sseClients = new Set();
@@ -131,7 +145,8 @@ app.post(
       const data = `data: ${JSON.stringify(eventRecord)}\n\n`;
       for (const clientRes of Array.from(sseClients)) {
         try {
-          clientRes.write(data);
+          // clientRes.write(data);
+          wsBroadcast({ type: "harbor_event", event: eventRecord });
         } catch (bErr) {
           // remove client if writing fails
           sseClients.delete(clientRes);
@@ -222,11 +237,12 @@ app.get("/events/stream", (req, res) => {
   });
 });
 
-app.listen(PORT, () => {
+server.listen(PORT, () => {
   console.log(
     `🚀 Harbor webhook listener ready on http://localhost:${PORT}/webhooks/harbor`
   );
   console.log("SSE stream available at /events/stream");
+  console.log("WebSocket path available at /ws");
   console.log("Trusted frontend origins:", TRUSTED_ORIGINS.join(", "));
 });
 
